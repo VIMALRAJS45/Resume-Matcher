@@ -60,7 +60,7 @@ def check_eligibility(resume_string, job_description_files, threshold=0.1):
 
 def main():
     st.set_page_config(
-        page_title="AI-Qualify",
+        page_title="iamneo - AI Gatekeeper",
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="collapsed",
@@ -92,7 +92,7 @@ def main():
     except LookupError:
         nltk.download('punkt')
 
-    new_title = '<p style="font-family:KaTeX_Caligraphic; color:#d2dacd; font-size: 45px; text-align: center; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);"><strong>Your AI Qualify</strong></p>'
+    new_title = '<p style="font-family:KaTeX_Caligraphic; color:#d2dacd; font-size: 45px; text-align: center; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);"><strong>Your AI Gatekeeper</strong></p>'
     st.markdown(new_title, unsafe_allow_html=True)
 
     new_header = '<p style="font-family:sans-serif; color:Black; font-size: 20px; text-align: center; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);"><i>An ATS to help your resume pass the <strong>Screening Stage.</strong></i></p>'
@@ -129,7 +129,7 @@ def main():
     else:
         st.warning('Please upload your resume in .pdf or .txt format to check eligibility for the below Roles.', icon="🤖")
         job_description_files = get_filenames_from_dir(PROCESSED_JOB_DESCRIPTIONS_PATH)
-        all_roles = '<p style="font-family:sans-serif; color:Black; font-size: 20px; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);"><i>The Roles for Which We Assess Your <strong>Qualification !!</strong></i></p>'
+        all_roles = '<p style="font-family:sans-serif; color:Black; font-size: 20px; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);"><i>The Roles for Which We Assess Your <strong>Profile !!</strong></i></p>'
         st.markdown(all_roles, unsafe_allow_html=True)
         for job_file in job_description_files:
          job_name = os.path.basename(job_file).split(".")[0]
