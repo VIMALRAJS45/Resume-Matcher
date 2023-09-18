@@ -108,4 +108,5 @@ wasabi==1.1.2
 watchdog==3.0.0
 zipp==3.16.2
 cohere==4.19.3
-qdrant-client
+transformers
+torch

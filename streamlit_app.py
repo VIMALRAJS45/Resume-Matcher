@@ -1,301 +1,148 @@
-import json
 import os
-from typing import List
-
-import networkx as nx
-import nltk
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
+import json
+import logging
 import streamlit as st
-from annotated_text import annotated_text, parameters
-from streamlit_extras import add_vertical_space as avs
-from streamlit_extras.badges import badge
-
-from scripts.similarity.get_similarity_score import get_similarity_score, find_path, read_config
+from scripts.ResumeProcessor import ResumeProcessor
+from scripts.JobDescriptionProcessor import JobDescriptionProcessor
+from scripts.utils.logger import init_logging_config
 from scripts.utils.ReadFiles import get_filenames_from_dir
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import nltk
 
-cwd = find_path('Resume-Matcher')
-config_path = os.path.join(cwd, "scripts", "similarity")
+init_logging_config()
 
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-
-parameters.SHOW_LABEL_SEPARATOR = False
-parameters.BORDER_RADIUS = 3
-parameters.PADDING = "0.5 0.25rem"
-
-
-def create_star_graph(nodes_and_weights, title):
-    # Create an empty graph
-    G = nx.Graph()
-
-    # Add the central node
-    central_node = "resume"
-    G.add_node(central_node)
-
-    # Add nodes and edges with weights to the graph
-    for node, weight in nodes_and_weights:
-        G.add_node(node)
-        G.add_edge(central_node, node, weight=weight * 100)
-
-    # Get position layout for nodes
-    pos = nx.spring_layout(G)
-
-    # Create edge trace
-    edge_x = []
-    edge_y = []
-    for edge in G.edges():
-        x0, y0 = pos[edge[0]]
-        x1, y1 = pos[edge[1]]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
-
-    edge_trace = go.Scatter(x=edge_x, y=edge_y, line=dict(
-        width=0.5, color='#888'), hoverinfo='none', mode='lines')
-
-    # Create node trace
-    node_x = []
-    node_y = []
-    for node in G.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
-
-    node_trace = go.Scatter(x=node_x, y=node_y, mode='markers', hoverinfo='text',
-                            marker=dict(showscale=True, colorscale='Rainbow', reversescale=True, color=[], size=10,
-                                        colorbar=dict(thickness=15, title='Node Connections', xanchor='left',
-                                                      titleside='right'), line_width=2))
-
-    # Color node points by number of connections
-    node_adjacencies = []
-    node_text = []
-    for node in G.nodes():
-        adjacencies = list(G.adj[node])  # changes here
-        node_adjacencies.append(len(adjacencies))
-        node_text.append(f'{node}<br># of connections: {len(adjacencies)}')
-
-    node_trace.marker.color = node_adjacencies
-    node_trace.text = node_text
-
-    # Create the figure
-    fig = go.Figure(data=[edge_trace, node_trace],
-                    layout=go.Layout(title=title, titlefont_size=16, showlegend=False,
-                                     hovermode='closest', margin=dict(b=20, l=5, r=5, t=40),
-                                     xaxis=dict(
-                                         showgrid=False, zeroline=False, showticklabels=False),
-                                     yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)))
-
-    # Show the figure
-    st.plotly_chart(fig)
-
-
-def create_annotated_text(input_string: str, word_list: List[str], annotation: str, color_code: str):
-    # Tokenize the input string
-    tokens = nltk.word_tokenize(input_string)
-
-    # Convert the list to a set for quick lookups
-    word_set = set(word_list)
-
-    # Initialize an empty list to hold the annotated text
-    annotated_text = []
-
-    for token in tokens:
-        # Check if the token is in the set
-        if token in word_set:
-            # If it is, append a tuple with the token, annotation, and color code
-            annotated_text.append((token, annotation, color_code))
-        else:
-            # If it's not, just append the token as a string
-            annotated_text.append(token)
-
-    return annotated_text
-
+PROCESSED_RESUMES_PATH = "Data/Processed/Resumes"
+PROCESSED_JOB_DESCRIPTIONS_PATH = "Data/Processed/JobDescription"
+UPLOADED_RESUMES_PATH = "Data/Resumes"  
 
 def read_json(filename):
     with open(filename) as f:
         data = json.load(f)
     return data
 
+def remove_old_files(files_path):
+    for filename in os.listdir(files_path):
+        try:
+            file_path = os.path.join(files_path, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            logging.error(f"Error deleting {file_path}:\n{e}")
 
-def tokenize_string(input_string):
-    tokens = nltk.word_tokenize(input_string)
-    return tokens
+    logging.info("Deleted old files from " + files_path)
 
+def preprocess_text(text):
+    tokens = nltk.word_tokenize(text)
+    tokens = [token.lower() for token in tokens if token.isalnum()]
+    return " ".join(tokens)
 
-st.image('Assets/img/header_image.jpg')
+def get_similarity_score(resume_string, job_description_string):
+    resume_string = preprocess_text(resume_string)
+    job_description_string = preprocess_text(job_description_string)
+    
+    tfidf_vectorizer = TfidfVectorizer()
+    tfidf_matrix = tfidf_vectorizer.fit_transform([resume_string, job_description_string])
+    
+    similarity_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+    
+    return similarity_score
 
-st.title(':blue[Resume Matcher]')
-st.subheader(
-    'Free and Open Source ATS to help your resume pass the screening stage.')
-st.markdown(
-    "Check the website [www.resumematcher.fyi](https://www.resumematcher.fyi/)")
-st.markdown(
-    '⭐ Give Resume Matcher a Star on [GitHub](https://github.com/srbhr/resume-matcher)')
-badge(type="github", name="srbhr/Resume-Matcher")
+def check_eligibility(resume_string, job_description_files, threshold=0.1):
+    eligible_jobs = []
+    for job_file in job_description_files:
+        job_description = read_json(os.path.join(PROCESSED_JOB_DESCRIPTIONS_PATH,job_file))
+        job_description_text = ' '.join(job_description["extracted_keywords"])
+        similarity_score = get_similarity_score(resume_string, job_description_text)
+        if similarity_score > threshold:
+            eligible_jobs.append(job_file)
+    return eligible_jobs
 
-st.text('For updates follow me on Twitter.')
-badge(type="twitter", name="_srbhr_")
+def main():
+    st.set_page_config(
+        page_title="AI-Qualify",
+        page_icon="🤖",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
 
-st.markdown(
-    'If you like the project and would like to further help in development please consider 👇')
-badge(type="buymeacoffee", name="srbhr")
+    hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+    """
+    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-avs.add_vertical_space(5)
+    st.image("https://images.crunchbase.com/image/upload/c_lpad,f_auto,q_auto:eco,dpr_1/ngtdnfed3au9ifom5w5b", width=180)
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background: linear-gradient(to right bottom, #eeeee4, #c6d1c4, #9cb5ac, #74999a, #537c8b, #4c6f82, #476378, #43566d, #485769, #4d5865, #525961, #575a5d);
+            background-size: cover
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-resume_names = get_filenames_from_dir("Data/Processed/Resumes")
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt')
 
-output = 0
+    new_title = '<p style="font-family:KaTeX_Caligraphic; color:#d2dacd; font-size: 45px; text-align: center; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);"><strong>Your AI Qualify</strong></p>'
+    st.markdown(new_title, unsafe_allow_html=True)
 
-if len(resume_names) > 1:
-    st.write("There are", len(resume_names),
-             " resumes present. Please select one from the menu below:")
-    output = st.slider('Select Resume Number', 0, len(resume_names) - 1, 0)
-else:
-    st.write("There is 1 resume present")
+    new_header = '<p style="font-family:sans-serif; color:Black; font-size: 20px; text-align: center; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);"><i>An ATS to help your resume pass the <strong>Screening Stage.</strong></i></p>'
+    st.markdown(new_header, unsafe_allow_html=True)
 
-avs.add_vertical_space(5)
+    uploaded_resume = st.file_uploader(" ",type=["pdf", "txt"])
 
-st.write("You have selected ", resume_names[output], " printing the resume")
-selected_file = read_json("Data/Processed/Resumes/" + resume_names[output])
+    eligible_jobs = [] 
+    success = False
+    if uploaded_resume is not None:
+        with st.spinner("Processing your resume..."):
+            if not os.path.exists(UPLOADED_RESUMES_PATH):
+                os.makedirs(UPLOADED_RESUMES_PATH)
+            remove_old_files(UPLOADED_RESUMES_PATH)
+            user_resume_path = os.path.join(UPLOADED_RESUMES_PATH, "user_resume.pdf")
+            with open(user_resume_path, "wb") as f:
+                f.write(uploaded_resume.read())
 
-avs.add_vertical_space(2)
-st.markdown("#### Parsed Resume Data")
-st.caption(
-    "This text is parsed from your resume. This is how it'll look like after getting parsed by an ATS.")
-st.caption("Utilize this to understand how to make your resume ATS friendly.")
-avs.add_vertical_space(3)
-# st.json(selected_file)
-st.write(selected_file["clean_data"])
+            remove_old_files(PROCESSED_RESUMES_PATH)
+            processor = ResumeProcessor("user_resume.pdf")
+            success = processor.process()
 
-avs.add_vertical_space(3)
-st.write("Now let's take a look at the extracted keywords from the resume.")
+            if success:
+                user_resume_file = os.path.join(PROCESSED_RESUMES_PATH, "user_resume.pdf-processed.json")
+                if os.path.exists(user_resume_file):
+                    user_resume = read_json(user_resume_file)
+                    user_resume_keywords = ' '.join(user_resume["extracted_keywords"])
+                    job_description_files = get_filenames_from_dir(PROCESSED_JOB_DESCRIPTIONS_PATH)
+                    eligible_jobs = check_eligibility(user_resume_keywords, job_description_files)
+                else:
+                    st.error("Error: User's processed resume file not found.")
+            else:
+                st.error("Error: Failed to process user's resume.")
+    else:
+        st.warning('Please upload your resume in .pdf or .txt format to check eligibility for the below Roles.', icon="🤖")
+        job_description_files = get_filenames_from_dir(PROCESSED_JOB_DESCRIPTIONS_PATH)
+        all_roles = '<p style="font-family:sans-serif; color:Black; font-size: 20px; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);"><i>The Roles for Which We Assess Your <strong>Qualification !!</strong></i></p>'
+        st.markdown(all_roles, unsafe_allow_html=True)
+        for job_file in job_description_files:
+         job_name = os.path.basename(job_file).split(".")[0]
+         st.markdown(f'<span style="color: black; font-size: 18px;"><em><strong>~  {job_name}</em></strong></span>', unsafe_allow_html=True)
 
-annotated_text(create_annotated_text(
-    selected_file["clean_data"], selected_file["extracted_keywords"],
-    "KW", "#0B666A"))
-
-avs.add_vertical_space(5)
-st.write("Now let's take a look at the extracted entities from the resume.")
-
-# Call the function with your data
-create_star_graph(selected_file['keyterms'], "Entities from Resume")
-
-df2 = pd.DataFrame(selected_file['keyterms'], columns=["keyword", "value"])
-
-# Create the dictionary
-keyword_dict = {}
-for keyword, value in selected_file['keyterms']:
-    keyword_dict[keyword] = value * 100
-
-fig = go.Figure(data=[go.Table(header=dict(values=["Keyword", "Value"],
-                                           font=dict(size=12),
-                                           fill_color='#070A52'),
-                               cells=dict(values=[list(keyword_dict.keys()),
-                                                  list(keyword_dict.values())],
-                                          line_color='darkslategray',
-                                          fill_color='#6DA9E4'))
-                      ])
-st.plotly_chart(fig)
-
-st.divider()
-
-fig = px.treemap(df2, path=['keyword'], values='value',
-                 color_continuous_scale='Rainbow',
-                 title='Key Terms/Topics Extracted from your Resume')
-st.write(fig)
-
-avs.add_vertical_space(5)
-
-job_descriptions = get_filenames_from_dir("Data/Processed/JobDescription")
-
-output = 0
-if len(job_descriptions) > 1:
-    st.write("There are", len(job_descriptions),
-             " job descriptions present. Please select one from the menu below:")
-    output = st.slider('Select Job Description Number',
-                       0, len(job_descriptions) - 1, 0)
-else:
-    st.write("There is 1 job description present")
-
-avs.add_vertical_space(5)
-
-st.write("You have selected ",
-         job_descriptions[output], " printing the job description")
-selected_jd = read_json(
-    "Data/Processed/JobDescription/" + job_descriptions[output])
-
-avs.add_vertical_space(2)
-st.markdown("#### Job Description")
-st.caption(
-    "Currently in the pipeline I'm parsing this from PDF but it'll be from txt or copy paste.")
-avs.add_vertical_space(3)
-# st.json(selected_file)
-st.write(selected_jd["clean_data"])
-
-st.markdown("#### Common Words between Job Description and Resumes Highlighted.")
-
-annotated_text(create_annotated_text(
-    selected_file["clean_data"], selected_jd["extracted_keywords"],
-    "JD", "#F24C3D"))
-
-st.write("Now let's take a look at the extracted entities from the job description.")
-
-# Call the function with your data
-create_star_graph(selected_jd['keyterms'], "Entities from Job Description")
-
-df2 = pd.DataFrame(selected_jd['keyterms'], columns=["keyword", "value"])
-
-# Create the dictionary
-keyword_dict = {}
-for keyword, value in selected_jd['keyterms']:
-    keyword_dict[keyword] = value * 100
-
-fig = go.Figure(data=[go.Table(header=dict(values=["Keyword", "Value"],
-                                           font=dict(size=12),
-                                           fill_color='#070A52'),
-                               cells=dict(values=[list(keyword_dict.keys()),
-                                                  list(keyword_dict.values())],
-                                          line_color='darkslategray',
-                                          fill_color='#6DA9E4'))
-                      ])
-st.plotly_chart(fig)
-
-st.divider()
-
-fig = px.treemap(df2, path=['keyword'], values='value',
-                 color_continuous_scale='Rainbow',
-                 title='Key Terms/Topics Extracted from the selected Job Description')
-st.write(fig)
-
-avs.add_vertical_space(3)
-
-config_file_path = config_path + "/config.yml"
-if os.path.exists(config_file_path):
-    config_data = read_config(config_file_path)
-    if config_data:
-        print("Config file parsed successfully:")
-        resume_string = ' '.join(selected_file["extracted_keywords"])
-        jd_string = ' '.join(selected_jd["extracted_keywords"])
-        result = get_similarity_score(resume_string, jd_string)
-        similarity_score = result[0]["score"]
-        st.write("Similarity Score obtained for the resume and job description is:", similarity_score)
-else:
-    print("Config file does not exist.")
+    if success and eligible_jobs:
+        st.markdown('<p style="font-family:sans-serif; color:Black; font-size: 20px; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);"><i>Eligible Jobs for you Based on your <strong>Resume !!</strong></i></p>', unsafe_allow_html=True)
+        for job_file in eligible_jobs:
+            job_name = os.path.basename(job_file).split(".")[0]
+            st.markdown(f'<span style="color: black; font-size: 18px;"><em><strong>~  {job_name}</em></strong></span>', unsafe_allow_html=True)
+    elif success:
+        st.markdown('<p style="font-family:sans-serif; color:Black; font-size: 18px; text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);"><em>You\'re not Eligible for any of the <strong>Jobs !!</strong><br>Just Keep building your Resume, Don\'t Lose Hope ❤️</em></p>', unsafe_allow_html=True)
 
 
-st.title(':blue[Resume Matcher]')
-st.subheader(
-    'Free and Open Source ATS to help your resume pass the screening stage.')
-st.markdown(
-    '⭐ Give Resume Matcher a Star on [GitHub](https://github.com/srbhr/Resume-Matcher/)')
-badge(type="github", name="srbhr/Resume-Matcher")
-
-st.text('For updates follow me on Twitter.')
-badge(type="twitter", name="_srbhr_")
-
-st.markdown(
-    'If you like the project and would like to further help in development please consider 👇')
-badge(type="buymeacoffee", name="srbhr")
+if __name__ == "__main__":
+    main()
